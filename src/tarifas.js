@@ -6,9 +6,7 @@ const HORA = 3600_000;
 // Tarifa residencial convencional "de aplicação" (a que consta na fatura, já com subsídios).
 const FILTRO_RESIDENCIAL = {
   DscClasse: 'Residencial',
-  DscSubClasse: 'Residencial',
   DscSubGrupo: 'B1',
-  DscModalidadeTarifaria: 'Convencional',
   DscBaseTarifaria: 'Tarifa de Aplicação',
   DscDetalhe: 'Não se aplica', // exclui a variante SCEE (geração distribuída)
 };
@@ -24,7 +22,7 @@ export function listarDistribuidoras() {
   return comCache('distribuidoras', 6 * HORA, async () => {
     const id = await resourceId(PACOTE_TARIFAS, '.csv');
     const linhas = await consultar(id, {
-      filters: FILTRO_RESIDENCIAL,
+      filters: { ...FILTRO_RESIDENCIAL, DscSubClasse: 'Residencial', DscModalidadeTarifaria: 'Convencional' },
       sort: 'DatInicioVigencia desc',
       limit: 2000,
       fields: ['SigAgente', 'NumCNPJDistribuidora', 'DatInicioVigencia', 'DatFimVigencia'],
@@ -61,35 +59,69 @@ export async function buscarPorNome(termo) {
   return lista.filter((d) => d.slug.includes(t) || viaAlias.includes(d.slug));
 }
 
-// Tarifa residencial vigente (R$/kWh, sem tributos) de uma distribuidora.
-export function tarifaVigente(distribuidora) {
-  return comCache(`tarifa:${distribuidora.cnpj}`, 6 * HORA, async () => {
-    const id = await resourceId(PACOTE_TARIFAS, '.csv');
-    const linhas = await consultar(id, {
-      filters: { ...FILTRO_RESIDENCIAL, NumCNPJDistribuidora: distribuidora.cnpj },
-      sort: 'DatInicioVigencia desc',
-      limit: 20,
-    });
-    const linha = linhas.find((l) => vigente(l)) ?? linhas[0];
-    if (!linha) return null;
+// Cada enquadramento -> subclasses/modalidade da base da ANEEL e como nomear as tarifas.
+// (A base usa travessão "–" em "Desconto Social – faixa 01".)
+export const MAPA_ENQUADRAMENTO = {
+  residencial: { modalidade: 'Convencional', subclasses: { convencional: 'Residencial' } },
+  tarifa_social: { modalidade: 'Convencional', subclasses: { baixa_renda: 'Baixa Renda' } },
+  desconto_social: {
+    modalidade: 'Convencional',
+    subclasses: { faixa01: 'Residencial Desconto Social – faixa 01', faixa02: 'Residencial Desconto Social – faixa 02' },
+  },
+  branca: { modalidade: 'Branca', subclasses: { branca: 'Residencial' } },
+};
 
-    const tusd = numeroBR(linha.VlrTUSD);
-    const te = numeroBR(linha.VlrTE);
-    if (tusd === null || te === null || linha.DscUnidadeTerciaria !== 'MWh') return null;
+const POSTOS = { 'Fora ponta': 'fora_ponta', Intermediário: 'intermediario', Ponta: 'ponta' };
+
+async function linhasVigentes(cnpj, subclasse, modalidade) {
+  const id = await resourceId(PACOTE_TARIFAS, '.csv');
+  const linhas = await consultar(id, {
+    filters: { ...FILTRO_RESIDENCIAL, DscSubClasse: subclasse, DscModalidadeTarifaria: modalidade, NumCNPJDistribuidora: cnpj },
+    sort: 'DatInicioVigencia desc',
+    limit: 30,
+  });
+  const ref = linhas.find((l) => vigente(l)) ?? linhas[0];
+  // Só as linhas do mesmo período (a tarifa branca tem uma linha por posto horário).
+  return ref ? linhas.filter((l) => l.DatInicioVigencia === ref.DatInicioVigencia) : [];
+}
+
+const tarifaKwh = (l) => {
+  const tusd = numeroBR(l.VlrTUSD);
+  const te = numeroBR(l.VlrTE);
+  if (tusd === null || te === null || l.DscUnidadeTerciaria !== 'MWh') return null;
+  return Number(((tusd + te) / 1000).toFixed(5));
+};
+
+// Tarifas (R$/kWh, sem tributos) de uma distribuidora para um enquadramento, ou null se faltar algum componente.
+export function tarifaVigente(distribuidora, enquadramento = 'residencial') {
+  const mapa = MAPA_ENQUADRAMENTO[enquadramento];
+  if (!mapa) return null;
+  return comCache(`tarifa:${distribuidora.cnpj}:${enquadramento}`, 6 * HORA, async () => {
+    const tarifas = {};
+    let ref = null;
+    for (const [chave, subclasse] of Object.entries(mapa.subclasses)) {
+      const linhas = await linhasVigentes(distribuidora.cnpj, subclasse, mapa.modalidade);
+      if (!linhas.length) return null;
+      ref ??= linhas[0];
+      if (enquadramento === 'branca') {
+        for (const l of linhas) if (POSTOS[l.NomPostoTarifario]) tarifas[POSTOS[l.NomPostoTarifario]] = tarifaKwh(l);
+      } else {
+        tarifas[chave] = tarifaKwh(linhas[0]);
+      }
+    }
+    if (Object.values(tarifas).some((v) => v === null)) return null;
+    if (enquadramento === 'branca' && Object.keys(tarifas).length !== 3) return null;
 
     return {
       distribuidora: distribuidora.nome,
       slug: distribuidora.slug,
       cnpj: distribuidora.cnpj,
-      subgrupo: linha.DscSubGrupo,
-      modalidade: linha.DscModalidadeTarifaria,
-      tusd_kwh: tusd / 1000,
-      te_kwh: te / 1000,
-      tarifa_kwh: Number(((tusd + te) / 1000).toFixed(5)),
-      inicio_vigencia: linha.DatInicioVigencia,
-      fim_vigencia: linha.DatFimVigencia,
-      vigente: vigente(linha),
-      resolucao: linha.DscREH,
+      enquadramento,
+      tarifas,
+      inicio_vigencia: ref.DatInicioVigencia,
+      fim_vigencia: ref.DatFimVigencia,
+      vigente: vigente(ref),
+      resolucao: ref.DscREH,
     };
   });
 }

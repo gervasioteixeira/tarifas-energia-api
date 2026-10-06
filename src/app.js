@@ -1,17 +1,44 @@
 import express from 'express';
-import { calcularFatura, DISPONIBILIDADE_KWH } from './calculo.js';
+import { calcularFatura, DISPONIBILIDADE_KWH, ENQUADRAMENTOS, LIMITE_DESCONTO_SOCIAL_KWH, LIMITE_TARIFA_SOCIAL_KWH, POSTOS_BRANCA } from './calculo.js';
 import { bandeiraDoMes, buscarPorNome, listarDistribuidoras, resolverDistribuidora, tarifaVigente } from './tarifas.js';
 
 const ok = (res, dados) => res.json({ sucesso: true, dados });
 const falha = (res, status, erro) => res.status(status).json({ sucesso: false, erro });
 
+// API pública e somente-leitura: CORS aberto por padrão (use CORS_ORIGIN para restringir ao domínio do app).
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+
+const AVISOS_ENQUADRAMENTO = {
+  tarifa_social: `Tarifa Social: tarifa zerada nos primeiros ${LIMITE_TARIFA_SOCIAL_KWH} kWh; acima disso foi aplicada a tarifa "Baixa Renda" da ANEEL (estimativa). Confira o tratamento de tributos e bandeira na fatura.`,
+  desconto_social: `Desconto Social: faixa 01 até ${LIMITE_DESCONTO_SOCIAL_KWH} kWh e faixa 02 acima disso.`,
+  branca: 'Tarifa Branca: o valor depende da distribuição do consumo por posto horário (consumo_por_posto).',
+};
+
 // Express 5 já encaminha rejeições de handlers async para o error handler.
 export function criarApp() {
   const app = express();
+  app.use((req, res, next) => {
+    res.set({
+      'Access-Control-Allow-Origin': CORS_ORIGIN,
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '86400',
+    });
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
   app.use(express.json());
   const r = express.Router();
 
-  r.get('/status', (req, res) => ok(res, { status: 'ok', versao: '2.0.0', fonte: 'ANEEL - dados abertos' }));
+  r.get('/status', (req, res) => ok(res, { status: 'ok', versao: '2.1.0', fonte: 'ANEEL - dados abertos' }));
+
+  r.get('/enquadramentos', (req, res) =>
+    ok(res, {
+      enquadramento: ENQUADRAMENTOS,
+      tipo_ligacao: Object.entries(DISPONIBILIDADE_KWH).map(([tipo, kwh_minimo]) => ({ tipo, kwh_minimo })),
+      postos_tarifa_branca: POSTOS_BRANCA,
+    }),
+  );
 
   r.get('/', async (req, res) => ok(res, await listarDistribuidoras()));
 
@@ -31,37 +58,55 @@ export function criarApp() {
   });
 
   r.get('/:distribuidora/tarifa', async (req, res) => {
+    const enquadramento = String(req.query.enquadramento ?? 'residencial');
+    if (!ENQUADRAMENTOS.includes(enquadramento))
+      return falha(res, 400, `enquadramento deve ser um de: ${ENQUADRAMENTOS.join(', ')}.`);
     const dist = await resolverDistribuidora(req.params.distribuidora);
     if (!dist) return falha(res, 404, 'Distribuidora não encontrada. Consulte GET /distribuidoras.');
-    const tarifa = await tarifaVigente(dist);
-    if (!tarifa) return falha(res, 404, 'Tarifa residencial não encontrada para esta distribuidora.');
+    const tarifa = await tarifaVigente(dist, enquadramento);
+    if (!tarifa) return falha(res, 404, `Tarifa "${enquadramento}" não encontrada para esta distribuidora.`);
     ok(res, tarifa);
   });
 
   r.post('/projecao', async (req, res) => {
-    const { consumo_kwh, distribuidora_slug, tipo_ligacao, icms_percentual, pis_cofins_percentual, cosip } = req.body ?? {};
+    const {
+      consumo_kwh, distribuidora_slug, tipo_ligacao, enquadramento = 'residencial', consumo_por_posto,
+      icms_percentual, pis_cofins_percentual, cosip,
+    } = req.body ?? {};
 
-    if (typeof consumo_kwh !== 'number' || !Number.isFinite(consumo_kwh) || consumo_kwh <= 0)
-      return falha(res, 400, 'consumo_kwh deve ser um número positivo.');
+    if (!ENQUADRAMENTOS.includes(enquadramento))
+      return falha(res, 400, `enquadramento deve ser um de: ${ENQUADRAMENTOS.join(', ')}.`);
     if (typeof distribuidora_slug !== 'string' || !distribuidora_slug.trim())
       return falha(res, 400, 'distribuidora_slug deve ser uma string não vazia.');
     if (tipo_ligacao !== undefined && !(tipo_ligacao in DISPONIBILIDADE_KWH))
       return falha(res, 400, `tipo_ligacao deve ser um de: ${Object.keys(DISPONIBILIDADE_KWH).join(', ')}.`);
     for (const [campo, v] of Object.entries({ icms_percentual, pis_cofins_percentual, cosip })) {
-      if (v !== undefined && (typeof v !== 'number' || v < 0)) return falha(res, 400, `${campo} deve ser um número >= 0.`);
+      if (v !== undefined && (typeof v !== 'number' || !(v >= 0))) return falha(res, 400, `${campo} deve ser um número >= 0.`);
     }
     if ((icms_percentual ?? 0) + (pis_cofins_percentual ?? 0) >= 100)
       return falha(res, 400, 'A soma das alíquotas deve ser menor que 100.');
 
+    let consumo = consumo_kwh;
+    if (enquadramento === 'branca') {
+      const c = consumo_por_posto;
+      const valido = c && typeof c === 'object' && POSTOS_BRANCA.every((p) => c[p] === undefined || (typeof c[p] === 'number' && c[p] >= 0));
+      if (!valido) return falha(res, 400, `consumo_por_posto deve ter números >= 0 em: ${POSTOS_BRANCA.join(', ')}.`);
+      consumo = POSTOS_BRANCA.reduce((s, p) => s + (c[p] ?? 0), 0);
+    }
+    if (typeof consumo !== 'number' || !Number.isFinite(consumo) || consumo <= 0)
+      return falha(res, 400, enquadramento === 'branca' ? 'consumo_por_posto deve somar mais de 0 kWh.' : 'consumo_kwh deve ser um número positivo.');
+
     const dist = await resolverDistribuidora(distribuidora_slug);
     if (!dist) return falha(res, 404, 'Distribuidora não encontrada com o slug informado.');
 
-    const [tarifa, bandeira] = await Promise.all([tarifaVigente(dist), bandeiraDoMes()]);
-    if (!tarifa) return falha(res, 404, 'Tarifa residencial não encontrada para esta distribuidora.');
+    const [tarifa, bandeira] = await Promise.all([tarifaVigente(dist, enquadramento), bandeiraDoMes()]);
+    if (!tarifa) return falha(res, 404, `Tarifa "${enquadramento}" não encontrada para esta distribuidora.`);
 
     const calculo = calcularFatura({
-      consumo_kwh,
-      tarifa_kwh: tarifa.tarifa_kwh,
+      consumo_kwh: consumo,
+      enquadramento,
+      tarifas: tarifa.tarifas,
+      consumo_por_posto,
       adicional_bandeira_kwh: bandeira?.valor_adicional_kwh ?? 0,
       tipo_ligacao,
       icms_percentual,
@@ -70,6 +115,7 @@ export function criarApp() {
     });
 
     const avisos = [];
+    if (AVISOS_ENQUADRAMENTO[enquadramento]) avisos.push(AVISOS_ENQUADRAMENTO[enquadramento]);
     if (!calculo.tributos_considerados)
       avisos.push('ICMS e PIS/COFINS não informados: valor_total_estimado não inclui tributos e ficará abaixo da fatura real.');
     if (!tarifa.vigente) avisos.push(`Tarifa vigente ainda não publicada pela ANEEL; usada a de ${tarifa.inicio_vigencia}.`);
@@ -78,8 +124,8 @@ export function criarApp() {
 
     ok(res, {
       distribuidora: tarifa.distribuidora,
-      consumo_kwh,
-      tarifa_kwh: tarifa.tarifa_kwh,
+      consumo_kwh: consumo,
+      tarifas_kwh: tarifa.tarifas,
       vigencia_tarifa: { inicio: tarifa.inicio_vigencia, fim: tarifa.fim_vigencia },
       bandeira: bandeira && { tipo: bandeira.tipo, mes: bandeira.mes_referencia, adicional_kwh: bandeira.valor_adicional_kwh },
       ...calculo,
@@ -92,6 +138,7 @@ export function criarApp() {
 
   app.use((err, req, res, next) => {
     if (res.headersSent) return next(err);
+    if (err.type === 'entity.parse.failed') return falha(res, 400, 'JSON inválido.');
     if (!err.status) console.error(err);
     falha(res, err.status || 500, err.status ? err.message : 'Erro interno.');
   });
