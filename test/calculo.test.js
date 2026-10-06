@@ -26,13 +26,20 @@ test('fatura residencial sem tributos', () => {
   assert.equal(r.tributos_considerados, false);
 });
 
-test('tributos incidem por dentro', () => {
+test('tributos por dentro e encadeados (confere com fatura real da Energisa PB)', () => {
   const r = calcularFatura({
     consumo_kwh: 100, tarifas: conv(0.8), adicional_bandeira_kwh: 0, icms_percentual: 20, pis_cofins_percentual: 5,
   });
   assert.equal(r.valor_sem_tributos, 80);
-  assert.equal(r.valor_total_estimado, 106.67); // 80 / 0,75
-  assert.equal(r.tributos, 26.67);
+  assert.equal(r.valor_total_estimado, 105.26); // 80 / (0,8 * 0,95)
+  assert.equal(r.tributos, 25.26);
+});
+
+test('fatura real: 1.041 kWh a 0,708558 com ICMS 20% e PIS/COFINS 9,25% -> 1.015,99', () => {
+  const r = calcularFatura({
+    consumo_kwh: 1041, tarifas: conv(0.708558), adicional_bandeira_kwh: 0, icms_percentual: 20, pis_cofins_percentual: 9.25,
+  });
+  assert.ok(Math.abs(r.valor_total_estimado - 1015.99) < 0.1, String(r.valor_total_estimado));
 });
 
 test('custo de disponibilidade fatura o mínimo da ligação', () => {

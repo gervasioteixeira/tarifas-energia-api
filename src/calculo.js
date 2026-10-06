@@ -80,12 +80,14 @@ export function calcularFatura({
   const bandeira = segmentos.reduce((s, x) => s + (x.incide_bandeira ? x.kwh * adicional_bandeira_kwh : 0), 0);
   const sem_tributos = energia + bandeira;
 
-  const aliquota = ((icms_percentual ?? 0) + (pis_cofins_percentual ?? 0)) / 100;
-  if (aliquota < 0 || aliquota >= 1) throw new RangeError('Alíquotas inválidas');
+  const icms = (icms_percentual ?? 0) / 100;
+  const pisCofins = (pis_cofins_percentual ?? 0) / 100;
+  if (icms < 0 || icms >= 1 || pisCofins < 0 || pisCofins >= 1) throw new RangeError('Alíquotas inválidas');
   const informouTributos = icms_percentual !== undefined || pis_cofins_percentual !== undefined;
 
-  // Os tributos incidem "por dentro": total = base / (1 - alíquota).
-  const com_tributos = sem_tributos / (1 - aliquota);
+  // Tributos "por dentro" e encadeados (a base do ICMS já inclui o PIS/COFINS, e a do PIS/COFINS exclui o ICMS):
+  // total = base / ((1 - ICMS) * (1 - PIS/COFINS)). Confere com faturas reais da Energisa PB.
+  const com_tributos = sem_tributos / ((1 - icms) * (1 - pisCofins));
 
   return {
     enquadramento,

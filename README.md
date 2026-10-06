@@ -37,10 +37,13 @@ sempre a **tarifa residencial vigente** e a **bandeira tarifária do mês**, con
   "distribuidora_slug": "energisa-pb",
   "tipo_ligacao": "bifasico",
   "icms_percentual": 20,
-  "pis_cofins_percentual": 5,
+  "pis_cofins_percentual": 9.25,
   "cosip": 0
 }
 ```
+
+Os tributos são aplicados "por dentro" e encadeados: `total = base / ((1 - ICMS) × (1 - PIS/COFINS))`. Essa fórmula reproduz o
+preço unitário com tributos impresso em faturas reais da Energisa PB (ICMS 20%, PIS 1,65% + COFINS 7,6%).
 
 Só `distribuidora_slug` e `consumo_kwh` são obrigatórios (na tarifa branca, `consumo_kwh` é substituído por
 `consumo_por_posto`). Sem `icms_percentual`/`pis_cofins_percentual` o resultado **não inclui tributos** e vem com um

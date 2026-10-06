@@ -83,8 +83,8 @@ export function criarApp() {
     for (const [campo, v] of Object.entries({ icms_percentual, pis_cofins_percentual, cosip })) {
       if (v !== undefined && (typeof v !== 'number' || !(v >= 0))) return falha(res, 400, `${campo} deve ser um número >= 0.`);
     }
-    if ((icms_percentual ?? 0) + (pis_cofins_percentual ?? 0) >= 100)
-      return falha(res, 400, 'A soma das alíquotas deve ser menor que 100.');
+    if ((icms_percentual ?? 0) >= 100 || (pis_cofins_percentual ?? 0) >= 100)
+      return falha(res, 400, 'As alíquotas devem ser menores que 100.');
 
     let consumo = consumo_kwh;
     if (enquadramento === 'branca') {

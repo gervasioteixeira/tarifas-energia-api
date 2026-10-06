@@ -352,10 +352,12 @@ export function calcularFatura(p: {
   const bandeira = segmentos.reduce((s, x) => s + (x.incide_bandeira ? x.kwh * p.adicional_bandeira_kwh : 0), 0);
   const sem_tributos = energia + bandeira;
 
-  const aliquota = ((p.icms_percentual ?? 0) + (p.pis_cofins_percentual ?? 0)) / 100;
-  if (aliquota < 0 || aliquota >= 1) throw new ApiError(400, "Alíquotas inválidas");
-  // Os tributos incidem "por dentro": total = base / (1 - alíquota).
-  const com_tributos = sem_tributos / (1 - aliquota);
+  const icms = (p.icms_percentual ?? 0) / 100;
+  const pisCofins = (p.pis_cofins_percentual ?? 0) / 100;
+  if (icms < 0 || icms >= 1 || pisCofins < 0 || pisCofins >= 1) throw new ApiError(400, "Alíquotas inválidas");
+  // Tributos "por dentro" e encadeados (base do ICMS inclui o PIS/COFINS; a do PIS/COFINS exclui o ICMS):
+  // total = base / ((1 - ICMS) * (1 - PIS/COFINS)). Confere com faturas reais da Energisa PB.
+  const com_tributos = sem_tributos / ((1 - icms) * (1 - pisCofins));
   const cosip = p.cosip ?? 0;
 
   return {
@@ -405,8 +407,8 @@ async function projecao(corpo: Json): Promise<Response> {
     if (!ehNumeroNaoNegativo(v)) return falha(400, `${campo} deve ser um número >= 0.`);
     opcionais[campo] = v;
   }
-  if ((opcionais["icms_percentual"] ?? 0) + (opcionais["pis_cofins_percentual"] ?? 0) >= 100)
-    return falha(400, "A soma das alíquotas deve ser menor que 100.");
+  if ((opcionais["icms_percentual"] ?? 0) >= 100 || (opcionais["pis_cofins_percentual"] ?? 0) >= 100)
+    return falha(400, "As alíquotas devem ser menores que 100.");
 
   const porPosto: Partial<Record<Posto, number>> = {};
   let consumo = corpo["consumo_kwh"];
