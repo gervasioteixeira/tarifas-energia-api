@@ -13,7 +13,8 @@ sempre a **tarifa residencial vigente** e a **bandeira tarifária do mês**, con
 - Tributos (ICMS, PIS/COFINS) e COSIP são parâmetros opcionais; o mínimo de 30/50/100 kWh depende de `tipo_ligacao` (antes era R$ 23,52 fixo).
 - Enquadramentos: residencial, tarifa social, desconto social e tarifa branca (ver abaixo).
 - CORS habilitado, para uso direto de front-ends (Lovable, etc.).
-- `slug` aceita apelidos (`energisa-pb`), sigla da ANEEL (`EPB`) ou CNPJ. Veja `data/aliases.js`.
+- `GET /distribuidoras` devolve `slug` e `nome` amigáveis para as principais distribuidoras (`energisa-pb` = Energisa Paraíba). O slug aceita também a sigla da ANEEL (`EPB`) ou o CNPJ. Veja `data/aliases.js`.
+- A resposta de `/projecao` inclui `tarifa_kwh` (média efetiva sem tributos) e `bandeira.nome`.
 - Removidos: `/carregar-cache`, `/estado/:uf` (a base da ANEEL não traz UF), `/slugs`, `/selecionaveis`, `/cache`.
 
 ## Endpoints

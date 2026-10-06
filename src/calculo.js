@@ -13,7 +13,7 @@ export const POSTOS_BRANCA = ['fora_ponta', 'intermediario', 'ponta'];
 const arredonda = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 /**
- * Divide o consumo faturado em segmentos { kwh, tarifa_kwh, bandeira }.
+ * Divide o consumo faturado em segmentos { kwh, tarifa_kwh, incide_bandeira }.
  * `tarifas` traz as tarifas (R$/kWh, sem tributos) necessárias para o enquadramento:
  *   residencial:     { convencional }
  *   tarifa_social:   { baixa_renda }
@@ -23,23 +23,23 @@ const arredonda = (n) => Math.round((n + Number.EPSILON) * 100) / 100;
 export function montarSegmentos({ enquadramento, kwh_faturado, tarifas, consumo_por_posto }) {
   switch (enquadramento) {
     case 'residencial':
-      return [{ rotulo: 'residencial', kwh: kwh_faturado, tarifa_kwh: tarifas.convencional, bandeira: true }];
+      return [{ rotulo: 'residencial', kwh: kwh_faturado, tarifa_kwh: tarifas.convencional, incide_bandeira: true }];
     case 'tarifa_social': {
       const isento = Math.min(kwh_faturado, LIMITE_TARIFA_SOCIAL_KWH);
       return [
-        { rotulo: 'isento (tarifa social)', kwh: isento, tarifa_kwh: 0, bandeira: false },
-        { rotulo: 'acima do limite', kwh: kwh_faturado - isento, tarifa_kwh: tarifas.baixa_renda, bandeira: true },
+        { rotulo: 'isento (tarifa social)', kwh: isento, tarifa_kwh: 0, incide_bandeira: false },
+        { rotulo: 'acima do limite', kwh: kwh_faturado - isento, tarifa_kwh: tarifas.baixa_renda, incide_bandeira: true },
       ];
     }
     case 'desconto_social': {
       const f1 = Math.min(kwh_faturado, LIMITE_DESCONTO_SOCIAL_KWH);
       return [
-        { rotulo: 'faixa 01', kwh: f1, tarifa_kwh: tarifas.faixa01, bandeira: true },
-        { rotulo: 'faixa 02', kwh: kwh_faturado - f1, tarifa_kwh: tarifas.faixa02, bandeira: true },
+        { rotulo: 'faixa 01', kwh: f1, tarifa_kwh: tarifas.faixa01, incide_bandeira: true },
+        { rotulo: 'faixa 02', kwh: kwh_faturado - f1, tarifa_kwh: tarifas.faixa02, incide_bandeira: true },
       ];
     }
     case 'branca': {
-      const seg = POSTOS_BRANCA.map((p) => ({ rotulo: p, kwh: consumo_por_posto?.[p] ?? 0, tarifa_kwh: tarifas[p], bandeira: true }));
+      const seg = POSTOS_BRANCA.map((p) => ({ rotulo: p, kwh: consumo_por_posto?.[p] ?? 0, tarifa_kwh: tarifas[p], incide_bandeira: true }));
       const total = seg.reduce((s, x) => s + x.kwh, 0);
       if (kwh_faturado > total) seg[0].kwh += kwh_faturado - total; // complemento do mínimo, no fora de ponta
       return seg;
@@ -77,7 +77,7 @@ export function calcularFatura({
 
   const segmentos = montarSegmentos({ enquadramento, kwh_faturado, tarifas, consumo_por_posto });
   const energia = segmentos.reduce((s, x) => s + x.kwh * x.tarifa_kwh, 0);
-  const bandeira = segmentos.reduce((s, x) => s + (x.bandeira ? x.kwh * adicional_bandeira_kwh : 0), 0);
+  const bandeira = segmentos.reduce((s, x) => s + (x.incide_bandeira ? x.kwh * adicional_bandeira_kwh : 0), 0);
   const sem_tributos = energia + bandeira;
 
   const aliquota = ((icms_percentual ?? 0) + (pis_cofins_percentual ?? 0)) / 100;

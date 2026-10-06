@@ -125,9 +125,10 @@ export function criarApp() {
     ok(res, {
       distribuidora: tarifa.distribuidora,
       consumo_kwh: consumo,
+      tarifa_kwh: calculo.kwh_faturado ? Number((calculo.energia_tusd_te / calculo.kwh_faturado).toFixed(5)) : 0, // média efetiva, sem tributos
       tarifas_kwh: tarifa.tarifas,
       vigencia_tarifa: { inicio: tarifa.inicio_vigencia, fim: tarifa.fim_vigencia },
-      bandeira: bandeira && { tipo: bandeira.tipo, mes: bandeira.mes_referencia, adicional_kwh: bandeira.valor_adicional_kwh },
+      bandeira: bandeira && { nome: bandeira.tipo, tipo: bandeira.tipo, mes: bandeira.mes_referencia, adicional_kwh: bandeira.valor_adicional_kwh },
       ...calculo,
       avisos,
     });

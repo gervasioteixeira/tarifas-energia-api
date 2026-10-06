@@ -1,5 +1,5 @@
 import { comCache, consultar, numeroBR, resourceId, PACOTE_BANDEIRAS, PACOTE_TARIFAS } from './aneel.js';
-import aliases from '../data/aliases.js';
+import conhecidas from '../data/aliases.js';
 
 const HORA = 3600_000;
 
@@ -28,11 +28,13 @@ export function listarDistribuidoras() {
       fields: ['SigAgente', 'NumCNPJDistribuidora', 'DatInicioVigencia', 'DatFimVigencia'],
     });
     const porCnpj = new Map();
-    for (const r of linhas.filter((l) => vigente(l))) {
+    for (const r of linhas.filter((l) => vigente(l) && l.SigAgente !== 'Não Informado')) {
       if (!porCnpj.has(r.NumCNPJDistribuidora)) {
+        const conhecida = conhecidas.find((c) => c.sigla === r.SigAgente);
         porCnpj.set(r.NumCNPJDistribuidora, {
-          nome: r.SigAgente,
-          slug: slugify(r.SigAgente),
+          nome: conhecida?.nome ?? r.SigAgente,
+          slug: conhecida?.slug ?? slugify(r.SigAgente),
+          sigla: r.SigAgente,
           cnpj: r.NumCNPJDistribuidora,
         });
       }
@@ -46,17 +48,21 @@ export async function resolverDistribuidora(entrada) {
   const chave = slugify(String(entrada));
   const digitos = String(entrada).replace(/\D/g, '');
   const lista = await listarDistribuidoras();
-  const sigla = aliases[chave] && slugify(aliases[chave]);
   return (
-    lista.find((d) => d.slug === chave || d.slug === sigla || (digitos.length === 14 && d.cnpj === digitos)) ?? null
+    lista.find(
+      (d) =>
+        d.slug === chave ||
+        slugify(d.sigla) === chave ||
+        (digitos.length === 14 && d.cnpj === digitos) ||
+        conhecidas.some((c) => c.sigla === d.sigla && c.apelidos.includes(chave)),
+    ) ?? null
   );
 }
 
 export async function buscarPorNome(termo) {
   const t = slugify(termo);
   const lista = await listarDistribuidoras();
-  const viaAlias = Object.entries(aliases).filter(([a]) => a.includes(t)).map(([, sigla]) => slugify(sigla));
-  return lista.filter((d) => d.slug.includes(t) || viaAlias.includes(d.slug));
+  return lista.filter((d) => d.slug.includes(t) || slugify(d.nome).includes(t) || slugify(d.sigla).includes(t));
 }
 
 // Cada enquadramento -> subclasses/modalidade da base da ANEEL e como nomear as tarifas.
