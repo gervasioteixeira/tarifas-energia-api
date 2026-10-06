@@ -22,6 +22,16 @@ class ApiError extends Error {
 
 const cache = new Map<string, { valor: unknown; expira: number }>();
 
+// Invalida entradas do cache por prefixo de chave. Usado pelo botão "Recalcular" (?refresh=1), no máximo
+// uma vez por minuto por chave, para não permitir martelar a ANEEL.
+const ultimaInvalidacao = new Map<string, number>();
+function invalidar(chave: string, prefixos: string[]) {
+  const agora = Date.now();
+  if (agora - (ultimaInvalidacao.get(chave) ?? 0) < 60_000) return;
+  ultimaInvalidacao.set(chave, agora);
+  for (const k of [...cache.keys()]) if (prefixos.some((p) => k.startsWith(p))) cache.delete(k);
+}
+
 // Cache com TTL; se a ANEEL falhar, devolve o último valor conhecido (mesmo vencido).
 async function comCache<T>(chave: string, ttl: number, carregar: () => Promise<T>): Promise<T> {
   const hit = cache.get(chave);
@@ -505,6 +515,7 @@ export async function handleTarifas(request: Request, caminho: string): Promise<
     if (a === "bandeira" && b === "atual") {
       const mes = url.searchParams.get("mes") ?? undefined;
       if (mes && !/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return falha(400, "mes deve estar no formato YYYY-MM.");
+      if (url.searchParams.get("refresh") === "1") invalidar("bandeira", ["bandeira:"]);
       const dados = await bandeiraDoMes(mes);
       return dados ? ok(dados) : falha(404, "Bandeira não encontrada para o período.");
     }
@@ -513,6 +524,7 @@ export async function handleTarifas(request: Request, caminho: string): Promise<
       if (!ehEnquadramento(enq)) return falha(400, `enquadramento deve ser um de: ${ENQUADRAMENTOS.join(", ")}.`);
       const dist = await resolverDistribuidora(a);
       if (!dist) return falha(404, "Distribuidora não encontrada. Consulte GET /distribuidoras.");
+      if (url.searchParams.get("refresh") === "1") invalidar(`tarifa:${dist.cnpj}`, [`tarifa:${dist.cnpj}`]);
       const tarifa = await tarifaVigente(dist, enq);
       return tarifa ? ok(tarifa) : falha(404, `Tarifa "${enq}" não encontrada para esta distribuidora.`);
     }
